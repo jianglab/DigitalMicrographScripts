@@ -4,25 +4,66 @@
 Number GMS = 0 //a variable to mark the GMS version, it is determined in main function. In GMS 1.x, size of images/array must be the power of 2.
 Number mainImageID = 0 //a variable to recaord the image ID
 Number voltage = 300
-Number boxsize = 512 //boxsize for grid-boxing
-Number oversample = 200 //In GMS 1.x, size of images/array/oversample must be the power of 2.
+Number cs = 2
+Number boxsize = 512  //boxsize for grid-boxing
+Number clip = 512  //clip a smaller central region from the single ring image
+Number oversample = 256 //In GMS 1.x, size of images/array/oversample must be the power of 2.
 Number length = boxsize*oversample 
 //Number oversample = length/boxsize
 //Number oversample = 1
-Number converter = 10000 //DM3 saves the apix in nm, MRC saves the apix in um, convert it to A
-//Number apix = 2
-Number highResolution = 4 //most microscopes may have the highest resolution 3~4A. Should not simply set it to Nyquist
+Number converter = 1 //DM3 saves the apix in nm, MRC saves the apix in um, convert it to A
+Number apix = 1
+Number highResolution = 5.5   //most microscopes may have the highest resolution 3~4A. Should not simply set it to Nyquist
 Number lowX, highX
 Number wavelen = 12.2639/sqrt(voltage * 1000.0 + 0.97845 * voltage * voltage)
 String imageName
-Number totalAstig = 200 //in nm
-Number labelPosX = 0, labelPosY = 0, remove = 0
+Number totalAstig = 100 //in nm
+Number labelPosX = 0, labelPosY = 0, removePeakLabel = 0, removeComponents = 0
 //Number fineFactor = 10
 Number fineFactor2 = 1 //for dst20, if 1, the image of polar coordinates has 1*360 columes
 Number fineFactor3 = 10 //for dst30, finer sampling than dst20
 Number numWdgFactor = 1
-Number numWdg1 = 360*numWdgFactor //The number of wedges when sampling on the single ring. It is equal to the number of points we sample on the single ring
-Number verbose = 0 //0: display 2 final plots, 1: display all plots and figures
+Number numWdg1 = 256*numWdgFactor //The number of wedges when sampling on the single ring. It is equal to the number of points we sample on the single ring
+Number verbose = 1  //0: no display, 1: display 2 final plots, 2: display all plots and figures
+
+//Mark the ctffind3 results on the target plot
+Number astigCtffind3 = 0   //in nm
+Number angCtffind3 = 0    //in degree
+Number s4Defocus = 0 //in nm
+Number correctedDefocus = 0  //in nm
+
+//Save result to a txt file
+Number wMeanDf, wAstig, wAngle
+Number fileID
+Number saveResults = 0
+Number nHistory = 500
+Image historyX := realImage("historyX", 4, nHistory, 1)
+Image historyY := realImage("historyY", 4, nHistory, 1)
+Number bestX = 0, bestY = 0
+Number size = 500, distance2Origin = size
+
+//grayscale in the points
+Number nGrayScale = 0
+Number grayScaleLow = 0 //0 is black
+Number grayScaleHigh = 1 
+
+
+//other important parameters for recording
+Number beamShiftX, beamShiftY //EMGetBeamShift
+Number calBeamShiftX, calBeamShiftY //EMGetCalibratedBeamShift
+Number beamTiltX, beamTiltY //EMGetBeamTilt
+Number calBeamTiltX, calBeamTiltY //EMGetCalibratedBeamTilt
+Number brightness //EMGetBrightness
+Number getMag //EMGetMagnification
+Number getFocus, getCalFocus //EMGetFocus, EMGetCalibratedFocus
+Number condStigX, condStigY //EMGetCondensorStigmation
+Number objStigX, objStigY //EMGetObjectiveStigmation
+Number calObjStigX, calObjStigY //EMGetCalibratedObjectiveStigmation
+Number spotSize //EMGetSpotSize
+
+
+
+
 
 linePlotImageDisplay lpid
 
@@ -31,7 +72,8 @@ class idcListenFFT
 	  Number num_chg, img_id
 	  //String task
 	  Image imgCloned, imgS1FFT, imgS1FFTAmp
-	  Image imgS1FFTAmpFiltered, filter, imgS2FFTAmp, imgS2FFTAmp_FFT, imgS2FFTAmp_FFTAmp, mask, ret
+	  Image imgS1FFTAmpFiltered, filter, imgS2FFTAmp, imgS2FFTAmp0, imgS2FFTAmp_FFT, imgS2FFTAmp_FFTAmp, mask, ret
+	  Image imgS1FFTAmpFiltered_Clip, imgS2FFTAmp_FFTAmp_Clip, imgS2FFTAmp0_Clip, imgS2FFTAmp_FFT_Ph
 	  Image dst, dst0, projectionLines0, rotationAverage0, oneLine0, projectionLines, rotationAverage, oneLine
 	  Image padded, paddedFFT, paddedFFTAmp, paddedFFTAmpHalf, padded1, paddedFFT1, paddedFFTAmp1, paddedFFTAmpHalf1
 	  Image imgS2FFTShifted, imgS2FFTShiftedAmp, imgS2FFTShifted_FFTAmp, imgS2FFTShifted_FFTAmp2, dst2, dst2T, dst20, projectionLines2, rotationAverage2, oneLine2
@@ -214,8 +256,8 @@ Image oversample1DArray(Object self, Number oversample, Number nx, Number nsampl
 	{
 			Image padded := createFloatImage( "Padded_Projection_One_Line0", nsamples, 1)
 			padded = 0
-			padded[0, 0, 1, floor((oversample/2-0.5)*nx)] = 0
-			padded[0, floor((oversample/2+0.5)*nx), 1, nsamples] = 0
+			//padded[0, 0, 1, floor((oversample/2-0.5)*nx)] = 0
+			//padded[0, floor((oversample/2+0.5)*nx), 1, nsamples] = 0
 			padded[0, (oversample/2-0.5)*nx, 1, (oversample/2+0.5)*nx] = array[icol, irow]
 			Image paddedFFT := RealFFT(padded)
 			Image paddedFFTAmp := (modulus(paddedFFT))
@@ -299,21 +341,43 @@ Image calculateShiftAndDefocus(Object self, Image imgS1FFTAmp, Number rmax, Numb
 		Number apixX = apix, apixY = apix, numX, numY
 		getSize(imgS1FFTAmp, numX, numY)
 		result("\n In calculateShiftAndDefocus, apix "+apixX+"\n image size "+numX+"*"+numY) //here numX==numY
+		//if (verbose == 2) ShowImage(imgS1FFTAmp)
 		
 		//add a mask in Fourier space to serve as a high pass filter to the input image 
 		filter := RealImage( "Filter", 4, numX, numY )
 		filter = tert(distance((icol-numX/2),(irow-numY/2))<(numX/2)*0.02, 0, 1) //set cutoff fixed?
 		imgS1FFTAmpFiltered = RealIFFT( RealFFT(imgS1FFTAmp) * filter )
 		imageSetName(imgS1FFTAmpFiltered, "imgS1_FFT_Amplitude_Filtered")
-		if (verbose) ShowImage(imgS1FFTAmpFiltered) //2D-S1 power spectra
+		if (clip && verbose > 1) 
+			{
+				ShowImage(imgS1FFTAmpFiltered) //2D-S1 power spectra
+				Number startX = round((boxsize-clip)/2), startY = round((boxsize-clip)/2)
+				imgS1FFTAmpFiltered_Clip := RealImage( "imgS1_FFT_Amplitude_Filtered_Clip", 4, clip, clip )
+				imgS1FFTAmpFiltered_Clip = imgS1FFTAmpFiltered.Slice2(startX, startY, 0, 0, clip, 1, 1, clip, 1)
+				ShowImage(imgS1FFTAmpFiltered_Clip)
+				
+			}
 		
 		
 		result("\n Convert S1-->S2")
 		imgS2FFTAmp := RealImage( "imgS2_FFT_Amplitude", 4, numX, numY )
+		imgS2FFTAmp0 := RealImage( "imgS2_FFT_Amplitude", 4, numX, numY )
 		imgS2FFTAmp = warp( imgS1FFTAmpFiltered, \
 		sqrt(distance((icol-numX/2),(irow-numY/2))/(numX/2))*rmax*cos(atan2(irow-numY/2, icol-numX/2))+numX/2,\
 		sqrt(distance((icol-numX/2),(irow-numY/2))/(numY/2))*rmax*sin(atan2(irow-numY/2, icol-numX/2))+numY/2 )
-		if (verbose) ShowImage(imgS2FFTAmp)  //2D-S2 power spectra
+		
+		imgS2FFTAmp0 = imgS2FFTAmp.imageClone()
+		if (clip && verbose > 1) 
+			 {
+				ShowImage(imgS2FFTAmp0)  //2D-S2 power spectra
+				Number startX = round((boxsize-clip)/2), startY = round((boxsize-clip)/2)
+				imgS2FFTAmp0_Clip := RealImage( "imgS2_FFT_Amplitude_Clip", 4, clip, clip )
+				imgS2FFTAmp0_Clip = imgS2FFTAmp0.Slice2(startX, startY, 0, 0, clip, 1, 1, clip, 1)
+				ShowImage(imgS2FFTAmp0_Clip)
+				
+			 }
+		//showimage(imgS2FFTAmp)
+		
 		/*
 		Image gaussblur := self.GaussianConvolution(imgS2FFTAmp,5)
 		Image imgS2FFTAmp_FFT_gauss := ComplexImage("imgS2_FFT_Amplitude_FFT_gauss", 8, numX, numY)
@@ -332,6 +396,8 @@ Image calculateShiftAndDefocus(Object self, Image imgS1FFTAmp, Number rmax, Numb
 		Number thresh
 		thresh = max(min(imgS2FFTAmp), mean(imgS2FFTAmp)-3*sqrt(variance(imgS2FFTAmp)))
 		imgS2FFTAmp = tert(imgS2FFTAmp[icol, irow]<thresh, thresh, imgS2FFTAmp[icol, irow])
+		//imageSetName(imgS2FFTAmp, "imgS2_FFT_Amplitude")
+		
 		
 		imgS2FFTAmp_FFT := ComplexImage("imgS2_FFT_Amplitude_FFT", 8, numX, numY)
 		imgS2FFTAmp_FFT = RealFFT(imgS2FFTAmp)
@@ -340,10 +406,24 @@ Image calculateShiftAndDefocus(Object self, Image imgS1FFTAmp, Number rmax, Numb
 
 		imgS2FFTAmp_FFTAmp := RealImage( "imgS2_FFT_Amplitude_FFT_Amplitude", 4, numX, numY )
 		imgS2FFTAmp_FFTAmp = log10(modulus(imgS2FFTAmp_FFT)) //will be transferred to the main function and used later
+		
+		//imgS2FFTAmp_FFT_Ph := RealImage( "imgS2_FFT_Amplitude_FFT_Phase", 4, numX, numY )
+		//imgS2FFTAmp_FFT_Ph = Phase(imgS2FFTAmp_FFT)
+		//ShowImage(imgS2FFTAmp_FFT_Ph)
+		//ShowImage(imgS2FFTAmp_FFTAmp)
 		//imgS2FFTAmp_FFTAmp = (modulus(imgS2FFTAmp_FFT))
-		if (verbose) ShowImage(imgS2FFTAmp_FFTAmp)
 		
+		//imageSetName(imgS2FFTAmp_FFTAmp, imageName)
 		
+		if (clip && verbose > 1)
+		{
+			ShowImage(imgS2FFTAmp_FFTAmp)			
+			Number startX = round((boxsize-clip)/2), startY = round((boxsize-clip)/2)
+			imgS2FFTAmp_FFTAmp_Clip := RealImage( "imgS2_FFT_Amplitude_FFT_Amplitude_Clip", 4, clip, clip )
+			imgS2FFTAmp_FFTAmp_Clip = imgS2FFTAmp_FFTAmp.Slice2(startX, startY, 0, 0, clip, 1, 1, clip, 1)
+			ShowImage(imgS2FFTAmp_FFTAmp_Clip)
+		}
+
 		//add a mask to serve as high pass filter, Fourier shifted image may not need this mask
 		mask := RealImage( "mask", 4, numX, numY )
 		mask = tert(distance((icol-numX/2),(irow-numY/2))<(numX/2)*0.02*(1/apixX), 0, 1) //set cutoff fixed?
@@ -365,7 +445,7 @@ Image calculateShiftAndDefocus(Object self, Image imgS1FFTAmp, Number rmax, Numb
 		dst = warp( imgS2FFTAmp_FFTAmp, icol*sin(irow*dr) + centerX, icol*cos(irow*dr) + centerY )
 		dst0 = warp( imgS2FFTAmp, icol*sin(irow*dr) + centerX, icol*cos(irow*dr) + centerY )
 		//ShowImage(dst)
-		if (verbose)
+		if (verbose > 1)
 		{
 			Image dstT := matrixTranspose(dst)
 			dstT.setName("dst_polar_coordinates_imgS2FFT_FFTAmp_transposed")
@@ -487,8 +567,8 @@ Image oversample1DArrayShifted(Object self, Number oversample, Number nx, Number
 
 			Image padded := createFloatImage( "Padded_Projection_One_Line0", nsamples, 1 )
 			padded = 0
-			padded[0, 0, 1, floor((oversample/2-0.5)*nx)] = 0
-			padded[0, floor((oversample/2+0.5)*nx), 1, nsamples] = 0
+			//padded[0, 0, 1, floor((oversample/2-0.5)*nx)] = 0
+			//padded[0, floor((oversample/2+0.5)*nx), 1, nsamples] = 0
 			padded[0, (oversample/2-0.5)*nx, 1, (oversample/2+0.5)*nx] = array[icol, irow]
 			
 			Image paddedShifted := ComplexImage( "Padded_Projection_One_Line0_Shifted", 8, nsamples, 1 )
@@ -565,10 +645,11 @@ Image calculateMinorMajorDirection(Object self, Image imgS2FFTAmp, Number shift,
 		mask = tert(distance((icol-numX/2),(irow-numY/2)) < peakPosition+shift-15 || distance((icol-numX/2),(irow-numY/2)) > peakPosition+shift+15, 0, 1) //we can calculate the mask size
 		//mask = tert( distance((icol-numX/2),(irow-numY/2)) > peakPosition+10 && distance((icol-numX/2),(irow-numY/2)) < peakPosition+40, 1, 0) //set cutoff fixed?
 		imgS2FFTShifted_FFTAmp = imgS2FFTShifted_FFTAmp*mask
-		if (verbose) ShowImage(imgS2FFTShifted_FFTAmp) //Fourier shifted 2D-S2 power spectra
+		if (verbose > 1) ShowImage(imgS2FFTShifted_FFTAmp) //Fourier shifted 2D-S2 power spectra
+		//ShowImage(imgS2FFTShifted_FFTAmp)
 		
 		//find the center of the image
-		Number centerX=numX/2, centerY = numY/2
+		Number centerX = numX/2, centerY = numY/2
 		//determine the half of the smallest dimension
 		Number halfMinor = min(numX, numY)/2
 		Number polarSamples2 = rangeDeg * fineFactor2
@@ -581,7 +662,7 @@ Image calculateMinorMajorDirection(Object self, Image imgS2FFTAmp, Number shift,
 		//convert the image to polar coordinates
 		dst2 := createFloatImage( "dst2_Polar_Coordinates_imgS2FFTShifted_FFTAmp", halfMinor, polarSamples2 )
 		dst2 = warp( imgS2FFTShifted_FFTAmp, icol*sin(irow*dr2) + centerX, icol*cos(irow*dr2) + centerY )
-		if (verbose)
+		if (verbose > 1)
 		{
 			dst2T := matrixTranspose(dst2)
 			dst2T.setName("dst2_Polar_Coordinates_imgS2FFTShifted_FFTAmp_transposed")
@@ -668,7 +749,7 @@ Image calculateMinorMajorDirection(Object self, Image imgS2FFTAmp, Number shift,
 			max(paddedFFTAmp2, maxX2, maxY2)
 			maxX2 /= (oversample/2)
 			Number cur = curWdg/step
-			ellipseRadius[0, cur, 1, cur+1] = maxX2
+			ellipseRadius[0, cur, 1, cur+1] = maxX2 - shift //remove the amount of Fourier shift
 			//result("\n "+curWdg+" "+maxX2)
 			
 			/*
@@ -698,29 +779,105 @@ Image calculateMinorMajorDirection(Object self, Image imgS2FFTAmp, Number shift,
 			
 		}
 		
+		//fix the extremely small values due to the cross in power spectra
+		Number eRadiusX, eRadiusY
+		Number eRadiusMean = mean(ellipseRadius)
+		eRadiusMean = mean(ellipseRadius)
+		getSize(ellipseRadius, eRadiusX, eRadiusY)
+		for (Number i=1; i<eRadiusX-1; i++)
+		{
+			if (sum(ellipseRadius[0, i, 1, i+1]) < (eRadiusMean/2.0))
+			{
+				Number pre = sum(ellipseRadius[0, i-1, 1, i])
+				Number post = sum(ellipseRadius[0, i+1, 1, i+2])
+				ellipseRadius[0, i, 1, i+1] = (pre+post)/2.0
+			}
+		}
+
+		
+		
+		
+		
 		setDisplayType(ellipseRadius, 4)
 		ImageSetDimensionScale(ellipseRadius, 0,  rangeDeg/numWdg)
+		//convert Y-axis label from pixel to nm
+		Number factor = 1000*(oversample/2)/((oversample) * s2max * nsamples / (nsamples-1) * 10000 * wavelen)
+		//factor = 1 
+		ImageSetIntensityScale(ellipseRadius, factor)
+		//ImageSetIntensityOrigin(ellipseRadius, shift)
+		
 		ellipseRadius.ImageSetDimensionUnitString(0, "Angle (degree)" )
-		ellipseRadius.ImageSetIntensityUnitString("Radius (pixels)" )
+		//ellipseRadius.ImageSetIntensityUnitString("Radius (pixels)" )
+		ellipseRadius.ImageSetIntensityUnitString("Defocus (nm)" )
 		linePlotImageDisplay lpid3 = ellipseRadius.imageGetImageDisplay(0)
 		lpid3.linePlotImageDisplaySetDoAutoSurvey(0,0)
 		Number minLimit = min(ellipseRadius), maxLimit = max(ellipseRadius), deltaLimit = maxLimit-minLimit
 		lpid3.lineplotimagedisplaysetcontrastlimits(minLimit - deltaLimit*0.25, maxLimit + deltaLimit*0.25)
-		lpid3.lineplotimagedisplaysetfontsize(15)
+		//lpid3.lineplotimagedisplaysetfontsize(15)
 		
 		//calculate the major and minor axis of ellipse
 		numWdg = numWdg/step
 		ComplexImage ellipseRadiusFFT := ComplexImage("Ellipse_Radius_FFT", 8, numWdg, 1)
 		ellipseRadiusFFT = RealFFT(ellipseRadius-mean(ellipseRadius))
+		result("\n mean of ellipseRadius = "+ mean(ellipseRadius)*factor)
 		
 		setDisplayType(ellipseRadiusFFT, 4)
-		ImageSetDimensionScale(ellipseRadiusFFT, 0,  (2*pi()/numWdg))
-		ImageSetDimensionOrigin(ellipseRadiusFFT, 0, (-1)*(2*pi()/numWdg)*(numWdg/2))
-		ellipseRadiusFFT.ImageSetDimensionUnitString(0, "Frequency (radian/sample)" )
-		ellipseRadiusFFT.ImageSetIntensityUnitString("Intensity" )
+		//ImageSetDimensionScale(ellipseRadiusFFT, 0,  (2*pi()/numWdg))
+		//ImageSetDimensionOrigin(ellipseRadiusFFT, 0, (-1)*(2*pi()/numWdg)*(numWdg/2))
+		ImageSetDimensionOrigin(ellipseRadiusFFT, 0, (-1)*(numWdg/2))
+		//ellipseRadiusFFT.ImageSetDimensionUnitString(0, "Frequency (radian/sample)" )
+		ellipseRadiusFFT.ImageSetDimensionUnitString(0, "Angular Frequency (Hz)" )
+		//ellipseRadiusFFT.ImageSetIntensityUnitString( "Intensity" )
+		ellipseRadiusFFT.ImageSetIntensityUnitString( "Amplitude" )
 		linePlotImageDisplay lpid4 = ellipseRadiusFFT.imageGetImageDisplay(0)
 		lpid4.linePlotImageDisplaySetDoAutoSurvey(0,0)
-		lpid4.lineplotimagedisplaysetfontsize(15)
+		//lpid4.lineplotimagedisplaysetfontsize(15)
+		
+		Number len = 10 //first 10 pixels
+		ComplexImage ellipseRadiusFFTSub := ComplexImage("Ellipse_Radius_FFT_Sub", 8, len, 1) //Only 0~10 pixels of ellipseRadiusFFT
+		ellipseRadiusFFTSub[0, 0, 1, 10] = ellipseRadiusFFT[0, numWdg/2, 1, numWdg/2+10]
+		setDisplayType(ellipseRadiusFFTSub, 4)
+		ellipseRadiusFFTSub.ImageSetDimensionUnitString(0, "Angular Frequency (Hz)" )
+		//ellipseRadiusFFTSub.ImageSetIntensityUnitString( "Intensity" )
+		ellipseRadiusFFTSub.ImageSetIntensityUnitString( "Amplitude" )
+		linePlotImageDisplay lpid5 = ellipseRadiusFFTSub.imageGetImageDisplay(0)
+		lpid5.linePlotImageDisplaySetDoAutoSurvey(0,0)
+		//lpid5.lineplotimagedisplaysetfontsize(15)
+		
+		RealImage ellipseRadiusFFTSubMod := RealImage("Ellipse_Radius_FFT_Sub_Mod", 4, len, 1)
+		ellipseRadiusFFTSubMod = modulus(ellipseRadiusFFTSub)
+		Number high = max(ellipseRadiusFFTSubMod)
+		Number low = 0
+		//result("\n "+high+" "+low)
+		//showImage(ellipseRadiusFFTSubMod)
+		
+		//make the x-axis label (e.g. 2Hz) below the bar positions
+		//ComplexImage ellipseRadiusFFTSubModified := ComplexImage("Ellipse_Radius_FFT_Sub_Modified", 8, len*10, 1)
+		RealImage ellipseRadiusFFTSubModified := REalImage("Ellipse_Radius_FFT_Sub_Modified", 4, len*10, 1)
+		ellipseRadiusFFTSubModified = 0
+		ellipseRadiusFFTSubModified[0, 5, 1, 15] = sum(ellipseRadiusFFTSubMod[0, 1, 1, 2])
+		ellipseRadiusFFTSubModified[0, 15, 1, 25] = sum(ellipseRadiusFFTSubMod[0, 2, 1, 3])
+		ellipseRadiusFFTSubModified[0, 25, 1, 35] = sum(ellipseRadiusFFTSubMod[0, 3, 1, 4])
+		ellipseRadiusFFTSubModified[0, 35, 1, 45] = sum(ellipseRadiusFFTSubMod[0, 4, 1, 5])
+		ellipseRadiusFFTSubModified[0, 45, 1, 55] = sum(ellipseRadiusFFTSubMod[0, 5, 1, 6])
+		ellipseRadiusFFTSubModified[0, 55, 1, 65] = sum(ellipseRadiusFFTSubMod[0, 6, 1, 7])
+		ellipseRadiusFFTSubModified[0, 65, 1, 75] = sum(ellipseRadiusFFTSubMod[0, 7, 1, 8])
+		ellipseRadiusFFTSubModified[0, 75, 1, 85] = sum(ellipseRadiusFFTSubMod[0, 8, 1, 9])
+		ellipseRadiusFFTSubModified[0, 85, 1, 95] = sum(ellipseRadiusFFTSubMod[0, 9, 1, 10])
+		
+		setDisplayType(ellipseRadiusFFTSubModified, 4)
+		ImageSetDimensionScale(ellipseRadiusFFTSubModified, 0,  1/10)
+		ellipseRadiusFFTSubModified.ImageSetDimensionUnitString(0, "Angular Frequency (Hz)" )
+		//ellipseRadiusFFTSubModified.ImageSetIntensityUnitString( "Intensity" )
+		ellipseRadiusFFTSubModified.ImageSetIntensityUnitString( "Amplitude" )
+		linePlotImageDisplay lpid6 = ellipseRadiusFFTSubModified.imageGetImageDisplay(0)
+		lpid6.linePlotImageDisplaySetDoAutoSurvey(0,0)
+		//lpid6.lineplotimagedisplaysetfontsize(15)
+		lpid6.lineplotimagedisplaySetContrastLimits(0, 10*round(high/10.0+0.5))
+		//showimage(ellipseRadiusFFTSubModified)
+		
+		
+		
 		
 		ComplexImage fitEllipseRadiusFFT := ComplexImage("Fit_Ellipse_Radius_FFT", 8, numWdg, 1)
 		fitEllipseRadiusFFT = 0
@@ -734,12 +891,12 @@ Image calculateMinorMajorDirection(Object self, Image imgS2FFTAmp, Number shift,
 		fitEllipseRadius += mean(ellipseRadius)
 		//showImage(fitEllipseRadius)
 		
-		lpid3.lineplotimagedisplaysetlegendshown(1)
+		//lpid3.lineplotimagedisplaysetlegendshown(1)
 		lpid3.imagedisplayaddimage(fitEllipseRadius, "Fitted Ellipse")
 		object sliceid0=lpid3.imagedisplaygetsliceidbyindex(0)
 		lpid3.imagedisplaysetslicelabelbyid(sliceid0, "Ellipse Radius")
 		object sliceid1=lpid3.imagedisplaygetsliceidbyindex(1)
-		lpid3.lineplotimagedisplaysetsliceLineThickness(sliceid1, 2)
+		if (GMS>1) lpid3.lineplotimagedisplaysetsliceLineThickness(sliceid1, 2)
 		
 		ComplexImage c = ellipseRadiusFFT[0, numWdg/2+2, 1, numWdg/2+3]
 		ConvertToComplex(c)
@@ -747,16 +904,23 @@ Image calculateMinorMajorDirection(Object self, Image imgS2FFTAmp, Number shift,
 		Number re = sum(real(c)), im = sum(imaginary(c))
 		ComplexNumber z = complex(re, im)
 		Number phi = phase(z)*180/pi()  //in degree
-		result("\n complexNumber "+re+" "+im+" "+phi+" degree ")
+		Number amp = abs(z)   //absolute value of the modulus of a complex number
+		result("\n complexNumber "+re+"+"+im+"i "+"\n phase = "+phi+" degree"+" amp = "+amp)
+		//calculate the length of major and minor axis from FFT directly
+		Number calcMajor = mean(fitEllipseRadius)+amp/(numWdg/2)
+		Number calcMinor = mean(fitEllipseRadius)-amp/(numWdg/2)
+		result("\n calcMajor = "+calcMAjor+"  calcMinor = "+calcMinor)
+		result("\n Max in Sine = "+max(fitEllipseRadius)+"  Min in Sine = "+min(fitEllipseRadius))
 		
 		//phi = mod(phi+360, 180)
 		phi = phi/2  // 2-fold astigmatism
 		phi = phi>0?phi:(phi+180)
 		
-		Number start = floor(phi-(rangeDeg/numWdg)/2), end = ceil(phi+(rangeDeg/numWdg)/2)
-		result("\n startPhi = "+start+"  endPhi = "+end)
+		//Number start = floor(phi-(rangeDeg/numWdg)/2), end = ceil(phi+(rangeDeg/numWdg)/2)
+		//result("\n startPhi = "+start+"  endPhi = "+end)
 		//Number refinedPhi = self.refinePhi(oversample, nx, nsamples, dst30, shift, mask1D, start, end)
 		//phi = refinedPhi
+		
 		
 		Number majorDirection = phi
 		//calculate the radius of phi direction
@@ -772,38 +936,61 @@ Image calculateMinorMajorDirection(Object self, Image imgS2FFTAmp, Number shift,
 		oneLine2Minor := dst2[curCol, 0, curCol+1, halfMinor]
 		//showimage(oneLine2Minor)
 		max(oneLine2Minor, minorRadius, temp2)
+	
+
+		//measure the major and minor axis length from the fitted curve
+		Number minorRadius1, majorRadius1
+		temp1 = majorDirection/360*numWdg
+		temp2 = minorDirection/360*numWdg
+		majorRadius1 = mean(fitEllipseRadius[0, temp1, 1, temp1+1])
+		minorRadius1 = mean(fitEllipseRadius[0, temp2, 1, temp2+1])
 		
-		//CANNOT  use the major and minor radius from Fourier shifted image
-		//result("\n Real shift again = "+shift)
-		//majorRadius = majorRadius - shift
-		//minorRadius = minorRadius - shift
+		
+		//majorRadius1 = calcMajor
+		//minorRadius1 = calcMinor
+		
+		Number deltaDefocus, defocusMajor, defocusMinor
+		deltaDefocus = (majorRadius1-minorRadius1)*factor
+		defocusMajor = majorRadius1 * factor
+		defocusMinor = minorRadius1 * factor
+		
+		
 		
 		result("\n majorDirection, minorDirection = "+majorDirection+" "+minorDirection)
-		result("\n majorRadius, minorRadius, diff = "+majorRadius+" "+minorRadius+" "+(majorRadius-minorRadius))
-		
+		//result("\n majorRadius, minorRadius, diff = "+majorRadius+" "+minorRadius+" "+(majorRadius-minorRadius))
+		result("\n From fitted curve, majorRadius, minorRadius, diff = "+majorRadius1+" "+minorRadius1+" "+(majorRadius1-minorRadius1))
+		result("\n deltaDefocus, defocusMajor, defocusMinor = "+deltaDefocus+" nm, "+defocusMajor+" nm, "+defocusMinor+" nm ")
 		//result("\n majorRadius, minorRadius, diff = "+majorRadius+" "+minorRadius+" "+(majorRadius-minorRadius))
 		
+		//use calcMajor and calcMinor from Fourier transform to represent the length of major and minor radius
+		majorRadius1 = calcMajor
+		minorRadius1 = calcMinor
+		deltaDefocus = (majorRadius1-minorRadius1)*factor
 		//displayAt(projectionLines2, 139, 47)  //too many lines to display, SLOW!
 		//setWindowSize(projectionLines2, 800, 500)
 		
 		//displayAt(projectionLines0, 139, 47)  //too many lines to display, SLOW!
 		//setWindowSize(projectionLines0, 800, 500)
 		
-		if (verbose)
+		if (verbose > 1)
 		{
 			displayAt(ellipseRadius, 139, 47)
 			displayAt(ellipseRadiusFFT, 139, 47)
+			//displayAt(ellipseRadiusFFTSub, 139, 47)
+			displayAt(ellipseRadiusFFTSubModified, 139, 47)
 		}
 		
 		//setWindowSize(ellipseRadius, 800, 400)
 		
-		Image ret2 := RealImage( "Ellipse_Distortion", 4, 6, 1 )
+		Image ret2 := RealImage( "Ellipse_Distortion", 4, 8, 1 )
 		ret2[0, 0, 1, 1] = majorDirection //Major axis direction (degree)
 		ret2[0, 1, 1, 2] = minorDirection //Minor axis direction (degree)
-		ret2[0, 2, 1, 3] = majorRadius  //Major radius
-		ret2[0, 3, 1, 4] = minorRadius  //Minor radius
-		ret2[0, 4, 1, 5] = (majorRadius-minorRadius)/(majorRadius+minorRadius)/2 //distrotion
+		ret2[0, 2, 1, 3] = majorRadius1  //Major radius
+		ret2[0, 3, 1, 4] = minorRadius1  //Minor radius
+		ret2[0, 4, 1, 5] = (majorRadius1-minorRadius1)/(majorRadius1+minorRadius1)/2 //distrotion
 		ret2[0, 5, 1, 6] = rangeDeg/polarSamples2 //stepsize
+		ret2[0, 6, 1, 7] = mean(ellipseRadius)*factor
+		ret2[0, 7, 1, 8] = deltaDefocus  //in nm
 		
 		result("\n Finish calculatedMinorMajorDirection")
 
@@ -863,8 +1050,10 @@ Image calculateMinorandMajorRadius(Object self, Number majorDirection, Number mi
 		//Image paddedFFTAmpHalf := paddedFFTAmp[0, nsamples/2, 1, nsamples]
 		Image mask1D := RealImage( "mask", 4, nsamples/2, 1 )
 		mask1D = tert(icol<peakPositionOversample*0.9 || icol>peakPositionOversample*1.1, 0, 1)
-		lowX = peakPositionOversample*0.95
-		highX = peakPositionOversample*1.05
+		//lowX = peakPositionOversample*0.95
+		//highX = peakPositionOversample*1.05
+		lowX = peakPositionOversample - 1000
+		highX = peakPositionOversample + 1000
 		result("\n lowX, highX = "+lowX+" "+highX)
 		//mask1D = tert(icol<peakPositionOversample-1000, 0, 1)
 		//showImage(mask1D)
@@ -1001,12 +1190,83 @@ image calculateMinorandMajorRadius(Object self, Number majorDirection, Number mi
 */
 
 
+void modifiedTrajectory(Object self, Number x, Number y)
+{
+		Number sizeX, sizeY
+		getSize(historyX, sizeX, sizeY)
+		//result("\n sizeX = "+sizeX)
+		
+		for (Number i=sizeX; i>1; i--)
+		{
+		
+			//result("\n i="+i)
+			historyX[0, i-1, 1, i] = mean(historyX[0, i-2, 1, i-1])
+			historyY[0, i-1, 1, i] = mean(historyY[0, i-2, 1, i-1])
+		}
+		
+		/*
+		//transfer the original 3rd element to the 4th element
+		historyX[0, 3, 1, 4] = mean(historyX[0, 2, 1, 3])
+		historyY[0, 3, 1, 4] = mean(historyY[0, 2, 1, 3])
+		
+		//transfer the original 2nd element to the 3rd element
+		historyX[0, 2, 1, 3] = mean(historyX[0, 1, 1, 2])
+		historyY[0, 2, 1, 3] = mean(historyY[0, 1, 1, 2])
+		
+		//transfer the original 1st element to the 2nd element
+		historyX[0, 1, 1, 2] = mean(historyX[0, 0, 1, 1])
+		historyY[0, 1, 1, 2] = mean(historyY[0, 0, 1, 1])
+		*/
+				
+		//save the new value (x, y) as the 1st element
+		historyX[0, 0, 1, 1] = x
+		historyY[0, 0, 1, 1] = y
+		
+		
+		
+}
+
+
 void actOnImage(Object self, Image img0)
 	{
 	
 		String task = ""
 		task = "Astigmatism"
 		result("\n Your mode is: "+task)
+		
+		
+		
+
+
+
+		
+		//other important parameters for recording
+		//Number beamShiftX, beamShiftY //EMGetBeamShift
+		EMGetBeamShift(beamShiftX, beamShiftY)
+		//Number calBeamShiftX, calBeamShiftY //EMGetCalibratedBeamShift
+		EMGetCalibratedBeamShift(calBeamShiftX, calBeamShiftY)
+		//Number beamTiltX, beamTiltY //EMGetBeamTilt
+		EMGetBeamTilt(beamTiltX, beamTiltY)
+		//Number calBeamTiltX, calBeamTiltY //EMGetCalibratedBeamTilt
+		EMGetCalibratedBeamTilt(calBeamTiltX, calBeamTiltY)
+		//Number brightness //EMGetBrightness
+		brightne = EMGetBrightness(ss)
+		//Number getMag //EMGetMagnification
+		getMag = EMGetMagnification()
+		//Number getFocus, getCalFocus //EMGetFocus, EMGetCalibratedFocus
+		getFocus = EMGetFocus()
+		getCalFocus = EMGetCalibratedFocus()
+		//Number condStigX, condStigY //EMGetCondensorStigmation
+		EMGetCondensorStigmation(condStigX, condStigY)
+		//Number objStigX, objStigY //EMGetObjectiveStigmation
+		EMGetObjectiveStigmation(objStigX, objStigY)
+		//Number calObjStigX, calObjStigY //EMGetCalibratedObjectiveStigmation
+		EMGetCalibratedObjectiveStigmation(calObjStigX, calObjStigY)
+		//Number spotSize //EMGetSpotSize
+		spotSize = EMGetSpotSize()
+		
+		//EMGetObjectiveStigmation(objStigX, objStigY)
+		//result("\nobjStigX, objStigY = "+objStigX+", "+objStigY)
 
 		// need to get apixX/apixY from the input image. 
 		Number apixX, apixY, numX, numY
@@ -1014,11 +1274,11 @@ void actOnImage(Object self, Image img0)
 		apixY = imageGetDimensionScale( img0, 1 )
 		getSize(img0, numX, numY)
 		//For DM3, converter=10; for MRC, converter=10000
-		//apixX = apix
-		//apixY = apix
-		apixX = apixX*converter
-		apixY = apixY*converter
-
+		apixX = apix
+		apixY = apix
+		//apixX = apixX*converter
+		//apixY = apixY*converter
+		//flipVertical(img0)
 		
 		//perform anisotropic magnification distortion, those parameter will be read from a text file
 		//Number aniso = 0.028, theta = 121.3, scale = 1.0  //Mag=14K
@@ -1045,6 +1305,7 @@ void actOnImage(Object self, Image img0)
 			Image imgCloned := img.Slice2(0, 0, 0, 0, squareX, 1, 1, squareX, 1)
 			getSize(imgCloned, numX, numY)
 			result("\n apix "+apixX+" "+apixY+"\n image size "+numX+"*"+numY) //here numX==numY
+			
 			
 			if (isRGBDataType(img,4))
 			  {
@@ -1108,9 +1369,8 @@ void actOnImage(Object self, Image img0)
 			Number minorRadius = mean(ret2[0, 3, 1, 4])
 			//Number distortion = mean(ret2[0, 4, 1, 5]) //Distortion
 			Number stepsize = mean(ret2[0, 5, 1, 6]) //stepsize
-
-			//majorDirection = 135
-			//minordirection = 45
+			Number meanDf = mean(ret2[0, 6, 1, 7]) //stepsize
+			Number deltaDefocus = mean(ret2[0, 7, 1, 8]) //astigmatism
 			
 			result("\n Major Radius after Fourier Shifting: "+majorRadius)
 			result("\n Minor Radius after Fourier Shifting: "+minorRadius)
@@ -1118,12 +1378,15 @@ void actOnImage(Object self, Image img0)
 			
 			//Image ret3 = self.calculateMinorandMajorRadius(majorDirection, minordirection, round(peakPosition), s2max)
 			Image ret3 = self.calculateMinorandMajorRadius(majorDirection, minordirection, round(peakPosition), s2max, recommendMaxShift)
-			majorRadius = mean(ret3[0, 0, 1, 1])
-			minorRadius = mean(ret3[0, 1, 1, 2])
-			Number deltaDefocus = mean(ret3[0, 2, 1, 3])
-			Number dfMajor = mean(ret3[0, 3, 1, 4])
-			Number dfMinor = mean(ret3[0, 4, 1, 5])
+			//majorRadius = mean(ret3[0, 0, 1, 1])
+			//minorRadius = mean(ret3[0, 1, 1, 2])
+			//Number deltaDefocus = mean(ret3[0, 2, 1, 3])
+			//Number dfMajor = mean(ret3[0, 3, 1, 4])
+			//Number dfMinor = mean(ret3[0, 4, 1, 5])
 			
+			
+			
+			/*
 			Number tmpRadius, tmpDirection
 			if (majorRadius < minorRadius)
 			{
@@ -1138,14 +1401,20 @@ void actOnImage(Object self, Image img0)
 				swap(oneLineMajor, oneLineMinor)
 				result("\n Swap major and minor axis!")
 			}
+			*/
 			
 			Number distortion = (majorRadius-minorRadius)/((majorRadius+minorRadius)/2)* 100
+			//In EM, the default astigAngle is the angle between major axis and +Y. 
+			//Here convert it to the angle between major axis and +X. 
 			Number astigAngle = (majorDirection+90) < 180 ? (majorDirection+90) : (majorDirection-90)
 			
+			
 			result("\n ***********RESULTS START*******************************************")
-			result("\n "+imageName+"  boxsize = "+boxsize+" "+GetTime(1))
-			result("\n Mean Defocus (um): "+meanDefocus)
-			result("\n Astigmatism / Delta defocus (um): "+deltaDefocus+"um = "+deltaDefocus*1000+"nm")
+			result("\n "+imageName+" apix = "+apix+"  boxsize = "+boxsize+" highRes = "+highResolution+" "+GetTime(1))
+			result("\n Mean Defocus (um): "+meanDefocus+" = "+meanDefocus*1000+" nm") //from calculateShiftAndDefocus
+			result("\n Mean Defocus (um): "+meanDf+" = "+meanDf+" nm") //from calculateMinorMajorDirection
+			//result("\n Astigmatism / Delta defocus (um): "+deltaDefocus+"um = "+deltaDefocus*1000+"nm")
+			result("\n Astigmatism / Delta defocus (um): "+deltaDefocus+" nm ")
 			result("\n Astigmatism angle to +X (degree): "+astigAngle)
 			result("\n Major Axis Direction to +Y (degree): "+majorDirection)
 			result("\n Minor Axis Direction to +Y (degree): "+minorDirection)
@@ -1154,6 +1423,13 @@ void actOnImage(Object self, Image img0)
 			result("\n Delta Radius in original (pixel): "+(majorRadius - minorRadius))
 			result("\n Distortion: "+distortion+"%") //distrotion
 			result("\n ***********RESULTS END*********************************************")
+			
+			wMeanDf = meanDf
+			wAstig = deltaDefocus
+			wAngle = astigAngle
+			
+			
+			//astigAngle = 180-astigAngle
 			
 			//plot 2 output figures. 
 			Number r_rgb = 0, g_rgb = 1, b_rgb = 0
@@ -1188,9 +1464,9 @@ void actOnImage(Object self, Image img0)
 					exit(0)
 				}
 				
-			if (remove) 
+			if (removePeakLabel) 
 				{
-					result("\n Remove Peak Label......"+" remove = "+remove) 
+					result("\n Remove Peak Label......"+" remove = "+removePeakLabel) 
 					lpid.LinePlotImageDisplayRemovePeakLabel( labelPosX )
 				}
 		
@@ -1253,14 +1529,15 @@ void actOnImage(Object self, Image img0)
 					
 			
 				setDisplayType(ellipseProjectionLines, 4)
-				ellipseProjectionLines.ImageSetDimensionUnitString(0, "Astigmatism (nm)" )
+				ellipseProjectionLines.ImageSetDimensionUnitString(0, "Defocus (nm)" )
 				//ellipseProjectionLines.ImageSetDimensionOrigin(0, -recommendMaxShift*(oversample/2))
 				//convert X-axis unit to nm
 				Number factor = 1000/((oversample) * s2max * nsamples / (nsamples-1) * 10000 * wavelen)
 				ellipseProjectionLines.ImageSetDimensionScale(0, factor)
 				ellipseProjectionLines.ImageSetDimensionOrigin(0, -recommendMaxShift*(oversample/2)*factor)
 				//ImageSetDimensionScale(ellipseProjectionLines, 0, halfMinor/nx0)
-				ellipseProjectionLines.ImageSetIntensityUnitString("Intensity")
+				//ellipseProjectionLines.ImageSetIntensityUnitString( "Intensity" )
+				ellipseProjectionLines.ImageSetIntensityUnitString( "Amplitude" )
 				
 				//linePlotImageDisplay 
 				lpid = ellipseProjectionLines.imageGetImageDisplay(0)
@@ -1275,7 +1552,7 @@ void actOnImage(Object self, Image img0)
 				lpid.lineplotimagedisplaysetdisplayedchannels(lowX, highX)
 				Number minY = min(ellipseProjectionLines), maxY = max(ellipseProjectionLines), deltaY = maxY - minY
 				lpid.lineplotimagedisplaysetcontrastlimits(minY - 0.1*deltaY, maxY + 0.25*deltaY)
-				lpid.lineplotimagedisplaysetfontsize(15)
+				//lpid.lineplotimagedisplaysetfontsize(15)
 				
 				//lpid.lineplotimagedisplaysetlegendshown(1)
 				object sliceid0=lpid.imagedisplaygetsliceidbyindex(0)
@@ -1288,9 +1565,13 @@ void actOnImage(Object self, Image img0)
 				lpid.lineplotimagedisplaysetsliceLineThickness(sliceid1, 2)
 				//lpid.LinePlotImageDisplayAddPeakLabel( maxX1-300, (maxY + 0.025*deltaY), ""+baseN(dfMinor*1000, 10)+"nm" )
 				
-				Number astig = round(deltaDefocus*1000*10)/10
+				Number astig = round(deltaDefocus*10)/10
+				//astig = abs(astig)
+				Number defocus = round(meanDf*10)/10 + s4Defocus
+				if (correctedDefocus) defocus = round(correctedDefocus*10)/10
+				
 				Number angle = round(astigAngle*10)/10
-				String label = "Mean defocus = "+meanDefocus*1000+" nm"+"\nAstigmatism = "+astig+" nm"+"\nAngle = "+angle+" degree"
+				String label = "Mean defocus = "+defocus+" nm"+"\nAstigmatism = "+astig+" nm"+"\nAngle = "+angle+" degree"
 				labelPosX = (maxX0+maxX1-600)/2
 				labelPosY = maxY + 0.2*deltaY
 				lpid.LinePlotImageDisplayAddPeakLabel( (maxX0+maxX1-600)/2, maxY + 0.2*deltaY, label )
@@ -1298,14 +1579,15 @@ void actOnImage(Object self, Image img0)
 				
 				}
 				
-			remove = 1
+			removePeakLabel = 1
 			
 			//Number deltaR = majorRadius-minorRadius
-			Number deltaR = deltaDefocus*1000 //astigmatism in nm
-			Number phiRad = astigAngle/180*pi() //in radian
+			Number deltaR = deltaDefocus //astigmatism in nm
+			Number phiRad = astigAngle/180.0*pi() //in radian
 			Number xc = deltaR * cos(phiRad), yc = deltaR * sin(phiRad)
 			//Number base2=trunc(log2(deltaR))
 			result("\n xc, yc = "+xc+" "+yc)
+			
 			
 			image xVals := [1,1]:
 			{
@@ -1317,12 +1599,38 @@ void actOnImage(Object self, Image img0)
 			   { yc }
 			}
 			
-			Number size = 500
+			//Number size = 500
 			Number sampling = totalAstig/(size/2)  //totalAstig (in nm) ~ 250 pixels
 			//size /= sampling
 			image xValSampled = round( (xVals) / sampling ) + size/2
 			image yValSampled = round( (yVals) / sampling ) + size/2
 			result("\n xValSampled, yValSampled = "+sum(xValSampled)+" "+sum(yValSampled))
+			
+			Number currentX = sum(xValSampled)
+			Number currentY = sum(yValSampled)
+			
+			self.modifiedTrajectory(sum(xValSampled), sum(yValSampled))
+			Number dist = distance((sum(xValSampled) - size/2), (sum(yValSampled) - size/2))
+			
+			if (dist < distance2Origin)
+			{
+					
+					distance2Origin = dist
+					bestX = sum(xValSampled)
+					bestY = sum(yValSampled)
+					result("\n distance = "+dist+" bestX = "+bestX+" bestY = "+bestY)
+				
+			}
+			
+			
+			
+			Number xCtffind3, yCtffind3
+			if (astigCtffind3)
+			{
+				xCtffind3 = round((astigCtffind3 * cos(angCtffind3/180.0*pi())) / sampling) + size/2
+				yCtffind3 = round((astigCtffind3 * sin(angCtffind3/180.0*pi())) / sampling) + size/2
+				result("\n xCtffind3, yCtffind3 = "+xCtffind3+" "+yCtffind3)
+			}
 			
 			if (doesImageExist(img_id)==0 && num_chg==0)
 				{	
@@ -1333,22 +1641,164 @@ void actOnImage(Object self, Image img0)
 			
 			//trajectory := RealImage( "Scatter (2D)", 4, size, size )
 			trajectory = 0	
-			trajectory = tert(distance((icol-mean(xValSampled)),(irow-mean(yValSampled))) < 5, 1, 0)
+			//trajectory = tert(distance((icol-mean(xValSampled)),(irow-mean(yValSampled))) < 5, 1, 0)
 			//trajectory[ xValSampled, yValSampled ] = 1
 			
 			SetInversionMode(trajectory, 1)
 			//showImage(trajectory)
 			ImageDisplay imageDisp = trajectory.ImageGetImageDisplay( 0 )
-			Number low, high
-			ImageDisplayGetContrastLimits(imageDisp, low, high)
-			ImageDisplaySetContrastLimits(imageDisp, 0.0, 1.0)
-			flipvertical(trajectory)
+			//Number low, high
+			//ImageDisplayGetContrastLimits(imageDisp, low, high)
+			//ImageDisplaySetContrastLimits(imageDisp, 0.0, 1.0)
+			//flipvertical(trajectory)
 			
-			result("\n sum = "+sum(trajectory)+" low = "+low+" high = "+high)
+			//result("\n sum = "+sum(trajectory)+" low = "+low+" high = "+high)
 			//result("\n xc, yc, size= "+sum(xValSampled)+" "+sum(yValSampled)+" "+size)
 			
 			component imgdisp2 = ImageGetImageDisplay(trajectory, 0)
+				
 			
+			if (astigCtffind3)
+			{
+			//add one circle to represnt the result of ctffind3
+			/*
+				if (yCtffind3 > size/2) 
+					{
+						yCtffind3 += size/2
+					}
+				else
+					{
+						yCtffind3 += size/2
+					}
+			*/
+				yCtffind3 = yCtffind3 - 2*(yCtffind3-size/2)
+				component ovalAnnot5 = NewOvalAnnotation(yCtffind3-6, xCtffind3-6, yCtffind3+6, xCtffind3+6)
+				ovalAnnot5.componentsetforegroundcolor(1,0,0)
+				ComponentSetFillMode(ovalAnnot5, 1)
+				imgdisp2.componentaddchildatend(ovalAnnot5)
+			}
+			
+			if (removeComponents) 
+			{
+					number numOvals=imgdisp2.componentcountchildrenoftype(6)
+					Result("\n numOvals = "+numOvals)
+					
+					for (Number num=0; num<numOvals; num++)
+					{
+							component annotid=imgdisp2.componentgetnthchildoftype(6,0)
+							annotid.componentremovefromparent()
+					}
+					
+			}
+			
+			
+			
+			
+			
+			Number sizeX, sizeY
+			getSize(historyX, sizeX, sizeY)
+			
+			//plot historical points by different size of the circles
+			/*
+			Number grayScaleLevel
+			Number deltaGrayScale = grayScaleHigh - grayScaleLow
+			Number r = 6
+			Number nGrayScale2 = 0
+			for (Number i=0; i<sizeX; i++)
+			{
+					Number histX = mean(historyX[0, i, 1, i+1])
+					if (histX) 
+					{
+						nGrayScale2++  //how many non-zero points in the array historyX
+					}
+					
+			}
+			result("\n nGrayScale2 = "+nGrayScale2)
+			
+			for (Number i=0; i<sizeX; i++)
+			{
+					Number histX = mean(historyX[0, i, 1, i+1]) //the most recent historical point
+					Number histY = mean(historyY[0, i, 1, i+1])
+					histY = histY - 2*(histY-size/2)
+					
+					grayScaleLevel = grayScaleLow + (deltaGrayScale/nGrayScale2)*i
+					
+					
+					if (histX) 
+					{
+							
+							//Number r = 2*(sizeX-i)
+							//result("\n grayScaleLevel = "+grayScaleLevel)
+							component ovalAnnot5 = NewOvalAnnotation(histY-r, histX-r, histY+r, histX+r)
+							
+							//Number t = (1.0/sizeX)*(sizeX-i)
+							//result("\n i = "+i+" histX = "+histX+" histY = "+histY+" t = "+t+" r = "+r)
+							//ovalAnnot5.componentsetforegroundcolor(t,t,t)
+							ovalAnnot5.componentsetforegroundcolor(grayScaleLevel,grayScaleLevel,grayScaleLevel)
+							ComponentSetFillMode(ovalAnnot5, 1)
+							imgdisp2.componentaddchildatend(ovalAnnot5)
+							
+					}
+						
+			}
+			
+			
+			*/
+			
+			
+			//plot historical points by greyscales of the points
+			
+			nGrayScale++
+			
+			Number grayScaleLevel
+			Number deltaGrayScale = grayScaleHigh - grayScaleLow
+			Number r = 6
+			
+			for (Number j=0; j<nGrayScale; j++)
+			{
+				grayScaleLevel = grayScaleLow + (deltaGrayScale/nGrayScale)*j
+				//result("\n grayScaleLevel = "+grayScaleLevel)
+				
+				Number histX2 = mean(historyX[0, j, 1, j+1]) //the most recent historical point
+				Number histY2 = mean(historyY[0, j, 1, j+1])
+				histY2 = histY2 - 2*(histY2-size/2)
+				
+				//if (j == (nGrayScale-2))
+				//{
+				
+				component ovalAnnot5 = NewOvalAnnotation(histY2-r, histX2-r, histY2+r, histX2+r)
+				ovalAnnot5.componentsetforegroundcolor(grayScaleLevel,grayScaleLevel,grayScaleLevel)
+				//ovalAnnot5.componentsetforegroundcolor(0.5,0.5,0.5)
+				ComponentSetFillMode(ovalAnnot5, 1)
+				imgdisp2.componentaddchildatend(ovalAnnot5)
+				//}
+				
+			}
+			
+			
+			
+			result("\n distance = "+dist+" bestX = "+bestX+" bestY = "+bestY)
+			Number bestY2 = bestY - 2*(bestY - size/2), bestR = 8
+			component ovalAnnot6 = NewOvalAnnotation(bestY2-bestR, bestX-bestR, bestY2+bestR, bestX+bestR)
+			ovalAnnot6.componentsetforegroundcolor(1,0,0) //red
+			//ComponentSetFillMode(ovalAnnot6, 1)         //fill in red
+			imgdisp2.componentaddchildatend(ovalAnnot6)
+			
+			result("\n currentX = "+currentX+" currentY = "+currentY)
+			Number currentY2 = currentY - 2*(currentY - size/2)
+			component ovalAnnot7 =  NewOvalAnnotation(currentY2-r, currentX-r, currentY2+r, currentX+r)
+			ovalAnnot7.componentsetforegroundcolor(0,0,0)  //black
+			ComponentSetFillMode(ovalAnnot7, 1)			   //fill in black
+			imgdisp2.componentaddchildatend(ovalAnnot7)
+			
+			
+			flipvertical(trajectory)
+			removeComponents = 1
+			
+			
+			
+			
+			/*
 			component ovalAnnot0 = NewOvalAnnotation(0, 0, size, size)
 			component ovalAnnot1 = NewOvalAnnotation(size*0.125, size*0.125, size*0.875, size*0.875)
 			component ovalAnnot2 = NewOvalAnnotation(size*0.25, size*0.25, size*0.75, size*0.75)
@@ -1362,18 +1812,32 @@ void actOnImage(Object self, Image img0)
 			imgdisp2.componentaddchildatend(ovalAnnot1)
 			imgdisp2.componentaddchildatend(ovalAnnot2)
 			imgdisp2.componentaddchildatend(ovalAnnot3)
-			
-			//component ovalAnnot4 = NewOvalAnnotation(size*0.48, size*0.48, size*0.52, size*0.52)
-			//ovalAnnot4.componentsetforegroundcolor(1,0,0)
-			//imgdisp2.componentaddchildatend(ovalAnnot4)
+			*/
+			component ovalAnnot0 = NewOvalAnnotation(0, 0, size, size)
+			component ovalAnnot1 = NewOvalAnnotation(size*0.1, size*0.1, size*0.9, size*0.9)
+			component ovalAnnot2 = NewOvalAnnotation(size*0.2, size*0.2, size*0.8, size*0.8)
+			component ovalAnnot3 = NewOvalAnnotation(size*0.3, size*0.3, size*0.7, size*0.7)
+			component ovalAnnot4 = NewOvalAnnotation(size*0.4, size*0.4, size*0.6, size*0.6)
+			ovalAnnot0.componentsetdrawingmode(1) // sets the background to off ie lines are not outlined
+			ovalAnnot0.componentsetforegroundcolor(0.7,0.7,0.7) 
+			ovalAnnot1.componentsetforegroundcolor(0.7,0.7,0.7)
+			ovalAnnot2.componentsetforegroundcolor(0.7,0.7,0.7)
+			ovalAnnot3.componentsetforegroundcolor(0.7,0.7,0.7)
+			ovalAnnot4.componentsetforegroundcolor(0.7,0.7,0.7)
+			imgdisp2.componentaddchildatend(ovalAnnot0)
+			imgdisp2.componentaddchildatend(ovalAnnot1)
+			imgdisp2.componentaddchildatend(ovalAnnot2)
+			imgdisp2.componentaddchildatend(ovalAnnot3)
+			imgdisp2.componentaddchildatend(ovalAnnot4)
+
 			
 			component lineAnnot0 = NewLineAnnotation(0, size/2, size, size/2)
 			component lineAnnot1 = NewLineAnnotation(size/2, 0, size/2, size)
-			lineAnnot0.componentsetforegroundcolor(0,0,1)
-			lineAnnot1.componentsetforegroundcolor(0,0,1)
+			lineAnnot0.componentsetforegroundcolor(0.7,0.7,0.7)
+			lineAnnot1.componentsetforegroundcolor(0.7,0.7,0.7)
 			imgdisp2.componentaddchildatend(lineAnnot0)
 			imgdisp2.componentaddchildatend(lineAnnot1)
-			
+			/*
 			component textAnnot0 = NewTextAnnotation(size/2, 0, ""+totalAstig+"nm", 15)
 			component textAnnot1 = NewTextAnnotation(size/2, size/8, ""+totalAstig*0.75+"nm", 15)
 			component textAnnot2 = NewTextAnnotation(size/2, size/4, ""+totalAstig*0.5+"nm", 15)
@@ -1386,6 +1850,24 @@ void actOnImage(Object self, Image img0)
 			imgdisp2.componentaddchildatend(textAnnot1)
 			imgdisp2.componentaddchildatend(textAnnot2)
 			imgdisp2.componentaddchildatend(textAnnot3)
+			*/
+			
+			component textAnnot0 = NewTextAnnotation(size/2, 0, ""+totalAstig+"nm", 15)
+			component textAnnot1 = NewTextAnnotation(size/2, size/10, ""+totalAstig*0.8+"nm", 15)
+			component textAnnot2 = NewTextAnnotation(size/2, size*2/10, ""+totalAstig*0.6+"nm", 15)
+			component textAnnot3 = NewTextAnnotation(size/2, size*3/10, ""+totalAstig*0.4+"nm", 15)
+			component textAnnot4 = NewTextAnnotation(size/2, size*4/10, ""+totalAstig*0.2+"nm", 15)
+			textAnnot0.componentsetforegroundcolor(1,0,0)
+			textAnnot1.componentsetforegroundcolor(1,0,0)
+			textAnnot2.componentsetforegroundcolor(1,0,0)
+			textAnnot3.componentsetforegroundcolor(1,0,0)
+			textAnnot4.componentsetforegroundcolor(1,0,0)
+			imgdisp2.componentaddchildatend(textAnnot0)
+			imgdisp2.componentaddchildatend(textAnnot1)
+			imgdisp2.componentaddchildatend(textAnnot2)
+			imgdisp2.componentaddchildatend(textAnnot3)
+			imgdisp2.componentaddchildatend(textAnnot4)
+			
 			
 			//component boxAnnot = NewBoxAnnotation(floor(size/2)-5, floor(size/2)-5, floor(size/2)+5, floor(size/2)+5)
 			//boxAnnot.componentsetdrawingmode(1) // sets the background to off ie lines are not outlined
@@ -1393,25 +1875,100 @@ void actOnImage(Object self, Image img0)
 			//imgdisp2.componentaddchildatend(boxAnnot)
 			ImageDisplaySetContrastLimits(imgdisp2, 0.0, 1.0)
 			
+			if (verbose > 1) //add an red arrow to represent the direction of astigmatism
+			{
+				component imgdisp3 = ImageGetImageDisplay(imgS2FFTAmp_FFTAmp, 0)
+				Number xp = boxsize/2 + boxsize/2 * cos(phiRad), yp = boxsize/2 - boxsize/2 * sin(phiRad)
+				component arrowAnnot3 = NewArrowAnnotation(boxsize/2, boxsize/2, yp, xp)
+				arrowAnnot3.componentsetforegroundcolor(1,0,0)
+				imgdisp3.componentaddchildatend(arrowAnnot3)
+				
+				component imgdisp4 = ImageGetImageDisplay(imgS2FFTShifted_FFTAmp, 0)
+				component arrowAnnot4 = NewArrowAnnotation(boxsize/2, boxsize/2, yp, xp)
+				arrowAnnot4.componentsetforegroundcolor(1,0,0)
+				imgdisp4.componentaddchildatend(arrowAnnot4)
+				
+				component imgdisp5 = ImageGetImageDisplay(imgS1FFTAmpFiltered, 0)
+				component arrowAnnot5 = NewArrowAnnotation(boxsize/2, boxsize/2, yp, xp)
+				arrowAnnot5.componentsetforegroundcolor(1,0,0)
+				imgdisp5.componentaddchildatend(arrowAnnot5)
+				
+				//showimage(imgS2FFTAmp)
+				component imgdisp6 = ImageGetImageDisplay(imgS2FFTAmp0, 0)
+				component arrowAnnot6 = NewArrowAnnotation(boxsize/2, boxsize/2, yp, xp)
+				arrowAnnot6.componentsetforegroundcolor(1,0,0)
+				imgdisp6.componentaddchildatend(arrowAnnot6)
+				
+				if (clip)
+				{
+					component imgdisp7 = ImageGetImageDisplay(imgS2FFTAmp_FFTAmp_Clip, 0)
+					xp = clip/2 + clip/2 * cos(phiRad)
+					yp = clip/2 - clip/2 * sin(phiRad)
+					component arrowAnnot7 = NewArrowAnnotation(clip/2, clip/2, yp, xp)
+					arrowAnnot7.componentsetforegroundcolor(1,0,0)
+					imgdisp7.componentaddchildatend(arrowAnnot7)
+					
+					component imgdisp8 = ImageGetImageDisplay(imgS1FFTAmpFiltered_Clip, 0)
+					component arrowAnnot8 = NewArrowAnnotation(clip/2, clip/2, yp, xp)
+					arrowAnnot8.componentsetforegroundcolor(1,0,0)
+					imgdisp8.componentaddchildatend(arrowAnnot8)
+					
+					component imgdisp9 = ImageGetImageDisplay(imgS2FFTAmp0_Clip, 0)
+					component arrowAnnot9 = NewArrowAnnotation(clip/2, clip/2, yp, xp)
+					arrowAnnot9.componentsetforegroundcolor(1,0,0)
+					imgdisp9.componentaddchildatend(arrowAnnot9)
+					
+				}
+				
+
+			}
 			
 			
+			Number imageID
+			imageID = getImageId(img)
+			
+			result("\n imageID = "+imageID+" apix = "+apix+" boxsize = "+boxsize+" highRes = "+highResolution)
+			result("\n df = "+wMeanDf+" dfdiff = "+wAstig+" dfang = "+wAngle)
+			result("\n nGrayScale = "+nGrayScale)
+			result("\n $$$$$$$ No. of points = "+mod(nGrayScale, 5))
+			
+			
+			
+			if (saveResults) 
+			{
+				//WriteFile(fileID, "\n"+imageID+" "+apix+" "+boxsize+" "+clip+" "+highResolution+" "+wMeanDf+" "+wAstig+" "+wAngle)
+				WriteFile(fileID, "\n"+imageID+" "+apix+" "+boxsize+" "+clip+" "+highResolution+" "+wMeanDf+" "+wAstig+" "+wAngle+" "+ \
+							objStigX+" "+objStigY+" "+calObjStigX+" "+calObjStigY+" "+ \
+							getFocus+" "+getCalFocus+" "+condStigX+" "+condStigY+" "+ \
+							getMag+" "+brightness+" "+spotSize+" "+ \
+							beamShiftX+" "+beamShiftY+" "+calBeamShiftX+" "+calBeamShiftY+" "+ \
+							beamTiltX+" "+beamTiltY+" "+calBeamTiltX+" "+calBeamTiltY)
+							
+							
+			}
+			
+			
+			//displayAt(ellipseProjectionLines, 139, 47)
+			//setWindowSize(ellipseProjectionLines, 600, 500)
+			//SetName(ellipseProjectionLines, imageName)
 		
-			if (doesImageExist(img_id)==0)
+			if (doesImageExist(img_id)==0 && verbose>0)
 			 {
 				
 				
 				displayAt(ellipseProjectionLines, 139, 47)
-				setWindowSize(ellipseProjectionLines, 600, 500)
+				setWindowSize(ellipseProjectionLines, 500, 400)
 				
-				displayAt(trajectory, 400, 47)
+				displayAt(trajectory, 600, 47)
 				//setWindowSize(trajectory, 500, 500)
+				
 			
 				
 			  }
 			
 			updateImage(ellipseProjectionLines)
 			//updateImage(trajectory)
-		
+			
 		
 		
 		
@@ -1443,20 +2000,26 @@ void actOnChange(object self, number evnt_flg, image img)
 		  result("\n Auto exiting due to time-out: re-launch if want to continue. \n")
 		  exit(0)
 		  }
-		/*  
+		  
 		Number currentID = getImageId(img)
-		result("\n Current image ID = "+currentID+" Image ID = "+mainImageID)
+		//result("\n Current image ID = "+currentID+" Image ID = "+mainImageID)
+		/*
 		if (currentID != mainImageID) 
 			{
 				result("\n Current image ID = "+currentID+" Image ID = "+mainImageID+"\n RUN>>>>>>")
 				mainImageID = currentID //currentID becomes the new mainImageID
-				//self.actOnImage(img)
+				self.actOnImage(img)
 				result("\n I am updating...mean = "+mean(img)+" variance = "+variance(img))
+				num_chg = 0
 			}
+		
 		*/
 		
+		Number repeat
+		if (GMS>1) repeat = 5
+		else repeat = 8
 		
-		if (mod(num_chg,5)==0)
+		if (mod(num_chg, repeat)==0)
 		  {
 			  string evnt_dscr
 			  ImageGetEventMap().DeconstructeventFlags( evnt_flg, evnt_dscr )
@@ -1465,6 +2028,9 @@ void actOnChange(object self, number evnt_flg, image img)
 			  result("\n counter = "+num_chg+" I am updating...mean = "+mean(img)+" variance = "+variance(img))
 			  num_chg = 0
 		  }
+		  
+		  
+		  
 		}
  
 
@@ -1479,9 +2045,9 @@ void main()
 		string msg_map, task
 		number lst_id, img_id
 		
-		OKDialog("Welcome to Asitgmatism_MagDistortion.s!"+ \
-		"\nThis script was developed by Rui Yan (yan49@purdue.edu) in Dr. Wen Jiang's group (jiang12@purdue.edu, http://jiang.bio.purdue.edu/) at Purdue University."+ \
-		"\nIt is free for academic study. \nFeel free to contact us if you have any problem.")
+		//OKDialog("Welcome to Asitgmatism_MagDistortion.s!"+ \
+		//"\nThis script was developed by Rui Yan (yan49@purdue.edu) in Dr. Wen Jiang's group (jiang12@purdue.edu, http://jiang.bio.purdue.edu/) at Purdue University."+ \
+		//"\nIt is free for academic study. \nFeel free to contact us if you have any problem.")
 		
 		//One "trick" used to determine the GMS version since there does not exist a command to get the DM version.
 		if (doesFunctionExist("Notes")) 
@@ -1502,25 +2068,157 @@ void main()
 			exit(0)
 		}
 		
+		//open a file to write results
+		
+		//Number fileID
+		if (saveResults)
+		{
+			
+			String filename = "results.txt"
+			If (!SaveAsDialog("Save text file as", GetApplicationDirectory(2,0) + "results.txt", filename)) Exit(0)
+			Result("\n Selected file path:"+filename)
+			fileID = CreateFileForWriting(filename)
+			//WriteFile(fileID, "imageID apix boxsize clip highRes df dfdiff dfang")
+			WriteFile(fileID, "imageID apix boxsize clip highRes defocus dfdiff dfang objStigX objStigY calObjStigX calObjStigY getFocus getCalFocus condStigX condStigY getMag brightness spotSize beamShiftX beamShiftY calBeamShiftX calBeamShiftY beamTiltX beamTiltY calBeamTiltX calBeamTiltY")
+		}
+		
+		
 		imageName = imageGetName(img)	
 		img_id = getImageId(img)
 		msg_map = "data_changed,data_value_changed:actOnChange"
 		idc_stn = alloc(idcListenFFT)
 		idc_stn.actOnImage(img)
 		lst_id = img.imageAddEventListener(idc_stn, msg_map)
+		
+		//result("\n imageName = "+imageName+"\n apix = "+apix+"\n boxsize = "+boxsize+"\n highRes = "+highResolution)
+		//result("\n df = "+wMeanDf+"\n dfdiff = "+wAstig+"\n dfang = "+wAngle)
+		/*
+		if (saveResults) 
+			{
+				WriteFile(fileID, "\n"+imageName+" "+apix+" "+boxsize+" "+clip+" "+highResolution+" "+wMeanDf+" "+wAstig+" "+wAngle)
+			}
+		*/	
 		//exit(0) //for single image test
 		while(!shiftDown()) 1==2 //press SHIFT to destroy
+		if (saveResults) 
+			{
+				CloseFile(fileID)
+			}
 		img.imageRemoveEventListener(lst_id)
+		//showImage(historyX)
+		//showImage(historyY)
 		exit(0)
 		
+		
+		
  }
+ 
+ 
+ 
+ 
 
-//use for batch processing
-/*
-void main()
+ /*
+ void main()
  {
 		Object idc_stn
 		Image img
+		String msg_map, task
+		Number lst_id, img_id
+		
+		String folder, filename
+		TagGroup FileList
+		number fFiles   = 1
+		number fFolders = 2
+		
+		//One "trick" used to determine the GMS version since there does not exist a command to get the DM version.
+		if (doesFunctionExist("Notes")) result("\n GMS 2.0 or above")
+		else result("\n GMS version is less than 2.0")
+		
+		If ( !GetDirectoryDialog( "Select base folder", "", folder ) ) 
+			Exit(0)
+			
+		FileList = GetFilesInDirectory( folder, fFiles + fFolders )
+		Result("\n Folder: "+folder)
+		
+		//open a file to write results
+		Number fileID
+		if (saveResults)
+		{
+			
+			String filename = "results.txt"
+			If (!SaveAsDialog("Save text file as", GetApplicationDirectory(2,0) + "results.txt", filename)) Exit(0)
+			Result("\n Selected file path:"+filename)
+			fileID = CreateFileForWriting(filename)
+			WriteFile(fileID, "imageName apix boxsize clip highRes df dfdiff dfang")
+		}
+		
+		
+		number nTags = FileList.TagGroupCountTags()
+		Number p1
+		for ( number i = 0; i < nTags; i++ )
+		{
+			TagGroup entryTG
+			FileList.TagGroupGetIndexedTagAsTagGroup( i, entryTG )
+			if ( entryTG.TagGroupIsValid() )
+			{
+				string filestr
+				if ( entryTG.TagGroupGetTagAsString( "Name", filestr ) )
+				{
+					
+					p1 = find(filestr, ".mrc") //only read MRC files
+					//result("\n "+p1)
+					if (p1>0) 
+						{
+							Result( "\n File:" + filestr )
+							filename = folder + filestr
+							img = OpenImage(filename)
+							result("\n Mean = "+mean(img))
+							
+							imageName = filestr
+							//imageName = imageGetName(img)
+							//result("\n "+imageName)
+							img_id = getImageId(img)
+							msg_map = "data_changed,data_value_changed:actOnChange"
+							idc_stn = alloc(idcListenFFT)
+							idc_stn.actOnImage(img)
+							lst_id = img.imageAddEventListener(idc_stn, msg_map)
+							//result("\n imageName = "+imageName+"\n apix = "+apix+"\n boxsize = "+boxsize+"\n highRes = "+highResolution)
+							//result("\n df = "+wMeanDf+"\n dfdiff = "+wAstig+"\n dfang = "+wAngle)
+							if (saveResults) 
+							{
+								WriteFile(fileID, "\n"+imageName+" "+apix+" "+boxsize+" "+clip+" "+highResolution+" "+wMeanDf+" "+wAstig+" "+wAngle)
+							}
+							
+							deleteImage(img)
+							
+						}
+				}
+			}
+		}
+		
+		
+		
+		
+		
+		if (saveResults) 
+			{
+				CloseFile(fileID)
+			}
+	
+ }
+ 
+
+*/
+ 
+
+/*
+
+//use for batch processing
+
+void main()
+ {
+		Object idc_stn
+		Image img, img0
 		String msg_map, task
 		Number lst_id, img_id
 		
@@ -1529,11 +2227,24 @@ void main()
 		else result("\n GMS version is less than 2.0")
 		
 		img.GetFrontImage()
+		
 		if (!img.getFrontImage())
 		{
 			result("\n No front image found => exiting. \n")
 			exit(0)
 		}
+		
+		Number fileID
+		if (saveResults)
+		{
+			
+			String filename = "results.txt"
+			If (!SaveAsDialog("Save text file as", GetApplicationDirectory(2,0) + "results.txt", filename)) Exit(0)
+			Result("\n Selected file path:"+filename)
+			fileID = CreateFileForWriting(filename)
+			WriteFile(fileID, "imageName apix boxsize clip highRes df dfdiff dfang")
+		}
+		
 		
 		While(img.ImageIsValid())
 		{
@@ -1544,12 +2255,24 @@ void main()
 			idc_stn = alloc(idcListenFFT)
 			idc_stn.actOnImage(img)
 			lst_id = img.imageAddEventListener(idc_stn, msg_map)
-
+			//result("\n imageName = "+imageName+"\n apix = "+apix+"\n boxsize = "+boxsize+"\n highRes = "+highResolution)
+			//result("\n df = "+wMeanDf+"\n dfdiff = "+wAstig+"\n dfang = "+wAngle)
+			if (saveResults) 
+			{
+				WriteFile(fileID, "\n"+imageName+" "+apix+" "+boxsize+" "+clip+" "+highResolution+" "+wMeanDf+" "+wAstig+" "+wAngle)
+			}
+			
+			
 			img := FindNextImage(img)
 		}
-
-
 		
+		if (saveResults) 
+			{
+				CloseFile(fileID)
+			}
+	
  }
-*/
+ 
+ */
+ 
 main()
