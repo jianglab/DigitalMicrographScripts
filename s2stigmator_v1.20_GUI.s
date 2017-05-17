@@ -1448,9 +1448,9 @@ void actOnImage(Object self, Image img0)
 				
 				Number angle = round(astigAngle*10)/10
 				String label = "Mean defocus = "+defocus+" nm"+"\nAstigmatism = "+astig+" nm"+"\nAngle = "+angle+" degree"
-				labelPosX = (maxX0+maxX1-600)/2
+				labelPosX = (maxX0+maxX1-300)/2
 				labelPosY = maxY + 0.2*deltaY
-				lpid.LinePlotImageDisplayAddPeakLabel( (maxX0+maxX1-600)/2, maxY + 0.2*deltaY, label )
+				lpid.LinePlotImageDisplayAddPeakLabel( labelPosX , labelPosY, label )
 				
 				
 				}
@@ -1934,6 +1934,7 @@ class PTDialogExample : uiframe
 		Result("\n Voltage = "+voltage+ "\n Cs = "+cs+"\n Boxsize = "+boxsize+ \
 		"\n Apix = "+apix+"\n HighRes = "+highResolution+"\n TotalAstig = "+totalAstig+ \
 		"\n Distortion = "+aniso+"\n Theta = "+theta+"\n")
+		wavelen = 12.2639/sqrt(voltage * 1000.0 + 0.97845 * voltage * voltage) //update wavelength according to the voltage changed by user
 		
 		
 	}
@@ -2141,7 +2142,7 @@ void main()
 		Number fileID0
 		//If (!OpenDialog(NULL, "Reading from text file", GetApplicationDirectory(2,0) + "AnisotropicMagnificationDistortion.txt", filename)) Exit(0)
 
-		filename0 = "E:\\AstigmatismPlot\\GatanExampleScripts\\AnisotropicMagnificationDistortion2017.txt"
+		filename0 = "C:\\AnisotropicMagnificationDistortion\\AnisotropicMagnificationDistortion.txt"
 		Result("\n Selected file path of anisotropic magnification distortion:"+filename0)
 		//fileID0 = OpenFileForReading(filename0)
 		
