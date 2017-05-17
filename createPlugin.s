@@ -15,13 +15,13 @@
 
 //4th, 5th and 6th argument:
 //              If this script is found, it will install it as a menu command with the given name (4th argument), 
-//	        in the given Menu (5th argument)
+//	        in the given menu (5th argument)
 //	        and the optional submenu (6th argument)
 
 //7th argument: The second number 0 can be 0 or 1. This value dicates whether the script wil be installed as a menu command or a library, respectively.
 
 //In general, the command is:
-//              AddScriptFileToPackage(your-script-and-directory , plugin-name-in-generation , package-level , plugin-name-in-manu, manu-name , submanu-name , 0)
+//              AddScriptFileToPackage(your-script-and-directory , plugin-name-in-generation , package-level , plugin-name-in-menu, menu-name , submenu-name , 0)
 
 //When installing the plug-in to other computers, copy the s2stigmator plug-in into the DM plug-in-folder:
 //              For DM version 1.x, C:\Program Files\Gatan\DigitalMicrograph\PlugIns\
